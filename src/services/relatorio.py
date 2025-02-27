@@ -1,10 +1,18 @@
+import os
+import streamlit as st
 from fpdf import FPDF
 from datetime import datetime
 import logging
 
 class RelatorioService:
     def __init__(self):
-        self.pdf = FPDF()
+        try:
+            # Se precisar de configurações específicas para relatórios,
+            # seguir o mesmo padrão de ambiente/secrets
+            self.pdf = FPDF()
+        except Exception as e:
+            logging.error(f"Erro ao inicializar RelatorioService: {str(e)}")
+            raise e
         
     def gerar_relatorio_impedimentos(self, dados_relatorio):
         """Gera relatório PDF com os impedimentos encontrados"""

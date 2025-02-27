@@ -1,3 +1,5 @@
+import os
+import streamlit as st
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -6,11 +8,23 @@ import logging
 from typing import List
 
 class EmailService:
-    def __init__(self, smtp_server: str, smtp_port: int, username: str, password: str):
-        self.smtp_server = smtp_server
-        self.smtp_port = smtp_port
-        self.username = username
-        self.password = password
+    def __init__(self, smtp_server=None, smtp_port=None, username=None, password=None):
+        try:
+            # Tenta usar parâmetros passados
+            self.smtp_server = smtp_server or "smtp.gmail.com"
+            self.smtp_port = smtp_port or 587
+            
+            # Tenta pegar credenciais do ambiente
+            self.username = username or os.getenv('EMAIL_USERNAME')
+            self.password = password or os.getenv('EMAIL_PASSWORD')
+            
+            # Se não encontrar, tenta das secrets
+            if not self.username or not self.password:
+                self.username = st.secrets["email"]["username"]
+                self.password = st.secrets["email"]["password"]
+                
+        except Exception as e:
+            raise ValueError("Credenciais de email precisam estar configuradas nas variáveis de ambiente ou nas secrets do Streamlit")
     
     def enviar_relatorio(self, destinatarios: List[str], arquivo_relatorio: str, assunto: str = None):
         """Envia relatório por e-mail"""
