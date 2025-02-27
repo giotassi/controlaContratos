@@ -91,14 +91,18 @@ class MonitorService:
             list: Lista de impedimentos encontrados
         """
         try:
-            # Primeiro busca os monitoramentos
+            # Busca os monitoramentos
             query = self.db.supabase.table('monitoramentos')\
                 .select('*')\
                 .gte('data_verificacao', data_limite.isoformat())\
                 .eq('status', False)
             
             if apenas_ativos:
+                # Se apenas_ativos=True, busca registros SEM data de regularização
                 query = query.is_('data_regularizacao', 'null')
+            else:
+                # Se apenas_ativos=False, busca todos os registros
+                query = query.not_.is_('data_regularizacao', 'null')
             
             response = query.execute()
             
