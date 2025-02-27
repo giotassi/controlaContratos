@@ -1,27 +1,31 @@
-from supabase import create_client
+from supabase import create_client, Client
 import os
 from dotenv import load_dotenv
 import logging
+import streamlit as st
+from datetime import datetime
 
 # Carrega variáveis de ambiente
 load_dotenv()
 
 class DatabaseService:
     def __init__(self):
-        self.supabase_url = os.getenv('SUPABASE_URL')
-        self.supabase_key = os.getenv('SUPABASE_KEY')
-        
-        if not self.supabase_url or not self.supabase_key:
-            logging.error("Credenciais do Supabase não encontradas!")
-            raise ValueError("SUPABASE_URL e SUPABASE_KEY precisam estar definidas nas variáveis de ambiente")
-        
-        logging.info("Conectando ao Supabase...")
         try:
-            self.supabase = create_client(self.supabase_url, self.supabase_key)
-            logging.info("Conexão com Supabase estabelecida com sucesso!")
+            # Primeiro tenta pegar das variáveis de ambiente (desenvolvimento)
+            self.supabase_url = os.getenv('SUPABASE_URL')
+            self.supabase_key = os.getenv('SUPABASE_KEY')
+            
+            # Se não encontrar, tenta pegar das secrets do Streamlit (produção)
+            if not self.supabase_url or not self.supabase_key:
+                self.supabase_url = st.secrets["supabase"]["url"]
+                self.supabase_key = st.secrets["supabase"]["key"]
+            
+            self.supabase: Client = create_client(
+                self.supabase_url,
+                self.supabase_key
+            )
         except Exception as e:
-            logging.error(f"Erro ao conectar com Supabase: {str(e)}")
-            raise e
+            raise ValueError("SUPABASE_URL e SUPABASE_KEY precisam estar configuradas nas variáveis de ambiente ou nas secrets do Streamlit")
 
     def test_connection(self):
         """Testa a conexão com o Supabase"""
