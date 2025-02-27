@@ -1,3 +1,5 @@
+import os
+import streamlit as st
 import requests
 import logging
 from datetime import datetime
@@ -6,7 +8,16 @@ from services.database import DatabaseService
 
 class TransparenciaService:
     def __init__(self):
-        self.api_key = '0a5acb096acf4893c84d90e3ae1ff2e9'
+        try:
+            # Primeiro tenta pegar das variáveis de ambiente (desenvolvimento)
+            self.api_key = os.getenv('API_KEY')
+            
+            # Se não encontrar, tenta pegar das secrets do Streamlit (produção)
+            if not self.api_key:
+                self.api_key = st.secrets["transparencia"]["api_key"]
+                
+        except Exception as e:
+            raise ValueError("API_KEY precisa estar configurada nas variáveis de ambiente ou nas secrets do Streamlit")
         self.base_url = "https://api.portaldatransparencia.gov.br/api-de-dados"
         self.headers = {
             'Accept': 'application/json',
