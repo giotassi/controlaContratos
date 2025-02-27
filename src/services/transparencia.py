@@ -1,4 +1,6 @@
 import os
+from dotenv import load_dotenv
+from pathlib import Path
 import streamlit as st
 import requests
 import logging
@@ -6,15 +8,25 @@ from datetime import datetime
 import time
 from services.database import DatabaseService
 
+# Carrega variáveis de ambiente
+env_path = Path(__file__).parent.parent.parent / '.env'
+load_dotenv(env_path)
+
 class TransparenciaService:
     def __init__(self):
         try:
-            # Primeiro tenta pegar das variáveis de ambiente (desenvolvimento)
+            # Primeiro tenta pegar das variáveis de ambiente
             self.api_key = os.getenv('API_KEY')
             
-            # Se não encontrar, tenta pegar das secrets do Streamlit (produção)
             if not self.api_key:
-                self.api_key = st.secrets["transparencia"]["api_key"]
+                try:
+                    # Tenta pegar das secrets do Streamlit
+                    self.api_key = st.secrets["transparencia"]["api_key"]
+                except:
+                    pass
+                
+            if not self.api_key:
+                raise ValueError("API_KEY não encontrada")
                 
         except Exception as e:
             raise ValueError("API_KEY precisa estar configurada nas variáveis de ambiente ou nas secrets do Streamlit")

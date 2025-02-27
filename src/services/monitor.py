@@ -97,35 +97,29 @@ class MonitorService:
                 .gte('data_verificacao', data_limite.isoformat())\
                 .eq('status', False)  # False significa que tem impedimento
             
-            if apenas_ativos:
-                # Se apenas_ativos=True, busca registros SEM data de regularização
-                query = query.is_('data_regularizacao', 'null')
-            
+            # Removemos o filtro de data_regularizacao já que a coluna não existe
             response = query.execute()
             
             if response.data:
                 impedimentos = []
                 # Para cada monitoramento, busca os dados da empresa
                 for item in response.data:
-                    # Busca dados da empresa
-                    empresa_response = self.db.supabase.table('empresas')\
-                        .select('id, cnpj, razao_social')\
+                    empresa = self.db.supabase.table('empresas')\
+                        .select('*')\
                         .eq('id', item['empresa_id'])\
                         .execute()
                     
-                    if empresa_response.data:
-                        empresa = empresa_response.data[0]
-                        impedimentos.append({
-                            'id': empresa['id'],
-                            'cnpj': empresa['cnpj'],  # Agora usando o campo CNPJ
-                            'razao_social': empresa['razao_social'],
+                    if empresa.data:
+                        impedimento = {
+                            'cnpj': empresa.data[0]['cnpj'],
+                            'razao_social': empresa.data[0]['razao_social'],
                             'sistema': item['tipo_verificacao'],
                             'data_verificacao': item['data_verificacao'],
                             'observacoes': item['observacoes']
-                        })
+                        }
+                        impedimentos.append(impedimento)
                 
                 return impedimentos
-            
             return []
             
         except Exception as e:
