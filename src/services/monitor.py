@@ -95,14 +95,11 @@ class MonitorService:
             query = self.db.supabase.table('monitoramentos')\
                 .select('*')\
                 .gte('data_verificacao', data_limite.isoformat())\
-                .eq('status', False)
+                .eq('status', False)  # False significa que tem impedimento
             
             if apenas_ativos:
                 # Se apenas_ativos=True, busca registros SEM data de regularização
                 query = query.is_('data_regularizacao', 'null')
-            else:
-                # Se apenas_ativos=False, busca todos os registros
-                query = query.not_.is_('data_regularizacao', 'null')
             
             response = query.execute()
             
