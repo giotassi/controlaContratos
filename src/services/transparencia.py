@@ -144,11 +144,14 @@ class TransparenciaService:
                         'observacoes': f"Erro na consulta: {str(e)}"
                     }
             
+            resultados['empresa_id'] = empresa_id
             return resultados
 
         except Exception as e:
             logging.error(f"Erro ao consultar Portal da Transparência: {str(e)}")
-            return {sistema: {'status': False, 'observacoes': f'Erro na consulta: {str(e)}'} for sistema in sistemas}
+            result = {sistema: {'status': False, 'observacoes': f'Erro na consulta: {str(e)}'} for sistema in sistemas}
+            result['empresa_id'] = empresa_id
+            return result
 
     def _consultar_sistema(self, sistema, cnpj):
         """Consulta um sistema específico (CEIS, CNEP ou CEPIM)"""

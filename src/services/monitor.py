@@ -146,7 +146,7 @@ class MonitorService:
             for empresa in response.data:
                 try:
                     resultado = self.verificar_empresa(
-                        empresa['id'],  # CNPJ está como ID
+                        empresa['cnpj'],
                         empresa['razao_social']
                     )
                     

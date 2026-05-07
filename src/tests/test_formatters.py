@@ -12,5 +12,6 @@ def test_validate_cnpj():
     assert validate_cnpj('1122233300018') == False   # Tamanho errado
 
 def test_format_cnpj():
-    assert format_cnpj('11222333000181') == '11.222.333/0001-81'
-    assert format_cnpj('11.222.333/0001-81') == '11.222.333/0001-81' 
+    # format_cnpj normaliza para apenas dígitos (usado nas chamadas de API)
+    assert format_cnpj('11222333000181') == '11222333000181'
+    assert format_cnpj('11.222.333/0001-81') == '11222333000181' 

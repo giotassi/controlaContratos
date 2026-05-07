@@ -27,6 +27,9 @@ CHROME_OPTIONS = {
 API_KEY = os.getenv("API_KEY")
 API_BASE_URL = "https://api.portaldatransparencia.gov.br/api-de-dados"
 
+# URL do CADIN/CFIL RS
+CADIN_URL = os.getenv("CADIN_URL", "https://cadin.rs.gov.br/cadin/faces/publico/consultaPublica/consultaPublicaCadin.xhtml")
+
 # Tipos de verificação
 TIPOS_VERIFICACAO = {
     'CADIN': 'Cadastro de Inadimplentes',

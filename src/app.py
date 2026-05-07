@@ -14,10 +14,6 @@ from views import (
 # Carrega variáveis de ambiente
 load_dotenv()
 
-# Teste temporário
-print("API_KEY:", os.getenv('API_KEY'))
-print("SUPABASE_URL:", os.getenv('SUPABASE_URL'))
-
 # Configurações do Streamlit
 st.set_page_config(
     page_title="Monitor de Impedimentos",
