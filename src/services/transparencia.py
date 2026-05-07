@@ -14,28 +14,18 @@ load_dotenv(env_path)
 
 class TransparenciaService:
     def __init__(self):
-        try:
-            # Primeiro tenta pegar das variáveis de ambiente
-            self.api_key = os.getenv('API_KEY')
-            
-            if not self.api_key:
-                try:
-                    # Tenta pegar das secrets do Streamlit
-                    self.api_key = st.secrets["transparencia"]["api_key"]
-                except:
-                    pass
-                
-            if not self.api_key:
-                raise ValueError("API_KEY não encontrada")
-                
-        except Exception as e:
-            raise ValueError("API_KEY precisa estar configurada nas variáveis de ambiente ou nas secrets do Streamlit")
+        self.api_key = os.getenv('API_KEY')
+        if not self.api_key:
+            try:
+                self.api_key = st.secrets["transparencia"]["api_key"]
+            except Exception:
+                pass
         self.base_url = "https://api.portaldatransparencia.gov.br/api-de-dados"
         self.headers = {
             'Accept': 'application/json',
-            'chave-api-dados': self.api_key
+            'chave-api-dados': self.api_key or "",
         }
-        self.db = DatabaseService()  # Adiciona acesso ao banco de dados
+        self.db = DatabaseService()
 
     def testar_api(self):
         """Testa se a API está respondendo e autorizada"""
@@ -52,6 +42,8 @@ class TransparenciaService:
 
     def consultar(self, cnpj: str, razao_social: str = None):
         """Consulta CEIS, CNEP e CEPIM para um CNPJ"""
+        if not self.api_key:
+            return {s: {'status': None, 'observacoes': 'API não configurada'} for s in ['ceis', 'cnep', 'cepim']}
         logging.info(f"Iniciando consulta Portal da Transparência para CNPJ {cnpj}")
         
         # Primeiro verifica/cadastra a empresa

@@ -56,27 +56,19 @@ def render():
             if resultado_transparencia:
                 st.subheader("Portal da Transparência")
                 col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.write("CEIS")
-                    if resultado_transparencia['ceis']['status']:
-                        st.success("✅ Regular")
-                    else:
-                        st.error("❌ Irregular")
-                    st.info(resultado_transparencia['ceis']['observacoes'])
-                
-                with col2:
-                    st.write("CNEP")
-                    if resultado_transparencia['cnep']['status']:
-                        st.success("✅ Regular")
-                    else:
-                        st.error("❌ Irregular")
-                    st.info(resultado_transparencia['cnep']['observacoes'])
-                
-                with col3:
-                    st.write("CEPIM")
-                    if resultado_transparencia['cepim']['status']:
-                        st.success("✅ Regular")
-                    else:
-                        st.error("❌ Irregular")
-                    st.info(resultado_transparencia['cepim']['observacoes']) 
+                sistemas_transp = [
+                    (col1, "CEIS", "ceis"),
+                    (col2, "CNEP", "cnep"),
+                    (col3, "CEPIM", "cepim"),
+                ]
+                for col, label, key in sistemas_transp:
+                    with col:
+                        st.write(label)
+                        status = resultado_transparencia[key]['status']
+                        if status is None:
+                            st.warning("⚠️ Não disponível")
+                        elif status:
+                            st.success("✅ Regular")
+                        else:
+                            st.error("❌ Irregular")
+                        st.info(resultado_transparencia[key]['observacoes'])
