@@ -16,7 +16,10 @@ def get_chrome_options() -> Options:
 
     # Linux (Streamlit Cloud): usa o Chromium do sistema
     if platform.system() == "Linux":
-        chromium = shutil.which("chromium-browser") or shutil.which("chromium")
+        chromium = (
+            shutil.which("chromium")
+            or shutil.which("chromium-browser")
+        )
         if chromium:
             options.binary_location = chromium
 
@@ -26,7 +29,11 @@ def get_chrome_options() -> Options:
 def get_chrome_service() -> Service:
     """Retorna o Service correto para o ambiente atual."""
     if platform.system() == "Linux":
-        chromedriver = shutil.which("chromedriver")
+        chromedriver = (
+            shutil.which("chromedriver")
+            or shutil.which("chromium-driver")
+            or shutil.which("chromium.chromedriver")
+        )
         if chromedriver:
             return Service(chromedriver)
 
