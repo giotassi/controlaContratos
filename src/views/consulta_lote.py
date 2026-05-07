@@ -2,154 +2,188 @@ import streamlit as st
 from services.monitor import MonitorService
 import pandas as pd
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 from services.relatorio import RelatorioService
-from services.email import EmailService
+from views.cadin_auth import exibir_status_cadin
 
-def formatar_cnpj(cnpj):
-    """Formata o CNPJ para o padrão XX.XXX.XXX/XXXX-XX"""
-    # Remove caracteres não numéricos
-    cnpj = ''.join(filter(str.isdigit, str(cnpj)))
-    
-    # Completa com zeros à esquerda se necessário
-    cnpj = cnpj.zfill(14)
-    
-    # Formata
-    return f"{cnpj[:2]}.{cnpj[2:5]}.{cnpj[5:8]}/{cnpj[8:12]}-{cnpj[12:]}"
+# Nomes aceitos para cada coluna (case-insensitive)
+_CNPJ_COLS    = ["cpf/cnpj", "cnpj", "cpf", "documento", "cpf / cnpj", "cpf_cnpj"]
+_NOME_COLS    = ["contratado", "razão social", "razao social", "empresa", "nome", "fornecedor"]
+
+
+def _detectar_coluna(df: pd.DataFrame, candidatos: list[str]) -> str | None:
+    mapa = {c.lower().strip(): c for c in df.columns}
+    for cand in candidatos:
+        if cand in mapa:
+            return mapa[cand]
+    return None
+
 
 def render():
     st.header("Consulta em Lote")
-    
+
+    exibir_status_cadin()
+
     monitor = MonitorService()
-    
+
     uploaded_file = st.file_uploader(
         "Escolha uma planilha Excel",
-        type=['xlsx', 'xls'],
-        help="A planilha deve conter uma coluna com os CNPJs"
+        type=["xlsx", "xls"],
+        help="A planilha deve conter colunas de CNPJ e nome da empresa",
     )
-    
-    if uploaded_file:
-        try:
-            df = pd.read_excel(
-                uploaded_file,
-                dtype={
-                    'Instrumento': str,
-                    'N° Contrato': str,
-                    'Ano Contrato': str,
-                    'Contratado': str,
-                    'CPF/CNPJ': str
-                }
+
+    if not uploaded_file:
+        return
+
+    try:
+        df = pd.read_excel(uploaded_file, dtype=str)
+    except Exception as e:
+        st.error(f"Erro ao ler planilha: {e}")
+        return
+
+    st.write("Preview:")
+    st.dataframe(df.head())
+
+    # ── Detecção automática de colunas ────────────────────────────────────────
+    col_cnpj  = _detectar_coluna(df, _CNPJ_COLS)
+    col_nome  = _detectar_coluna(df, _NOME_COLS)
+
+    colunas = list(df.columns)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        col_cnpj = st.selectbox(
+            "Coluna de CNPJ",
+            colunas,
+            index=colunas.index(col_cnpj) if col_cnpj else 0,
+        )
+    with col2:
+        col_nome = st.selectbox(
+            "Coluna de Razão Social",
+            colunas,
+            index=colunas.index(col_nome) if col_nome else 0,
+        )
+
+    incluir_cadin = st.checkbox(
+        "Incluir CADIN/RS na consulta (requer autenticação acima)",
+        value=False,
+        help="Desmarque para pular o CADIN e evitar alertas de sessão não autenticada.",
+    )
+
+    if not st.button("Processar Planilha", type="primary"):
+        return
+
+    # ── Filtra linhas com CNPJ válido ─────────────────────────────────────────
+    def _limpar_cnpj(valor) -> str:
+        digits = "".join(c for c in str(valor) if c.isdigit())
+        if len(digits) == 13:   # zero à esquerda perdido pelo Excel
+            digits = digits.zfill(14)
+        elif len(digits) == 10: # CPF sem zero
+            digits = digits.zfill(11)
+        return digits
+
+    df_proc = df.copy()
+    df_proc["_cnpj_clean"] = df_proc[col_cnpj].apply(_limpar_cnpj)
+    df_proc = df_proc[df_proc["_cnpj_clean"].str.len().isin([11, 14])].reset_index(drop=True)
+
+    if df_proc.empty:
+        st.error(f"Nenhuma linha com CNPJ válido encontrada na coluna '{col_cnpj}'.")
+        return
+
+    total = len(df_proc)
+
+    # ── Progresso ─────────────────────────────────────────────────────────────
+    st.subheader("Progresso")
+    progress_bar   = st.progress(0.0)
+    txt_progresso  = st.empty()
+    txt_decorrido  = st.empty()
+    txt_restante   = st.empty()
+    txt_media      = st.empty()
+    txt_status     = st.empty()
+
+    start_time = time.time()
+    tempos: list[float] = []
+    resultados: list   = []
+
+    for idx in range(total):
+        row        = df_proc.iloc[idx]
+        cnpj       = row["_cnpj_clean"]
+        razao      = str(row[col_nome]).strip() if col_nome else cnpj
+
+        txt_status.info(f"🔄 Consultando ({idx + 1}/{total}): {razao}")
+
+        t0        = time.time()
+        resultado = monitor.verificar_empresa(cnpj, razao)
+        resultados.append(resultado)
+
+        elapsed_item = time.time() - t0
+        tempos.append(elapsed_item)
+        media        = sum(tempos) / len(tempos)
+        decorrido    = time.time() - start_time
+        restante     = media * (total - (idx + 1))
+
+        progress_bar.progress((idx + 1) / total)
+        txt_progresso.markdown(f"**{idx + 1} / {total}** empresas processadas")
+        txt_decorrido.markdown(f"⏰ Decorrido: **{str(timedelta(seconds=int(decorrido)))}**")
+        txt_restante.markdown(f"⏳ Estimado restante: **{str(timedelta(seconds=int(restante)))}**")
+        txt_media.markdown(f"⚡ Média por empresa: **{media:.1f}s**")
+
+    txt_status.success("✅ Processamento concluído!")
+
+    # ── Resultados ────────────────────────────────────────────────────────────
+    st.subheader("Resultados")
+    for idx in range(total):
+        row    = df_proc.iloc[idx]
+        cnpj   = row["_cnpj_clean"]
+        razao  = str(row[col_nome]).strip() if col_nome else cnpj
+        resultado = resultados[idx]
+        label  = f"{razao} ({cnpj})"
+
+        if not isinstance(resultado, dict) or "error" in resultado:
+            st.error(f"❌ {label}: Erro — {resultado}")
+            continue
+
+        irregulares     = []
+        nao_consultados = []
+        for sistema, res in resultado.items():
+            if sistema == "status" or not isinstance(res, dict):
+                continue
+            if not incluir_cadin and sistema.lower() == "cadin":
+                continue
+            s = res.get("status")
+            if s is None:
+                nao_consultados.append(sistema.upper())
+            elif not s:
+                irregulares.append((sistema.upper(), res.get("observacoes", "N/A")))
+
+        if irregulares:
+            with st.expander(f"❌ {label} — Irregular"):
+                for sistema, obs in irregulares:
+                    st.write(f"- **{sistema}:** {obs}")
+        else:
+            st.success(f"✅ {label} — Regular em todos os sistemas")
+
+        if nao_consultados:
+            st.warning(
+                f"⚠️ {label}: {', '.join(nao_consultados)} não consultado(s) "
+                "— autentique o CADIN acima para incluir."
             )
-            st.write("Preview da planilha:")
-            st.dataframe(df.head())
-            
-            if st.button("Processar Planilha"):
-                # Container para informações de progresso
-                progress_container = st.container()
-                
-                with progress_container:
-                    st.subheader("Progresso")
-                    
-                    # Métricas de progresso
-                    total = len(df)
-                    progress_bar = st.progress(0)
-                    concluidos = st.empty()  # Para atualizar número de concluídos
-                    percentual = st.empty()  # Para atualizar percentual
-                    
-                    # Métricas de tempo
-                    st.subheader("⏱️ Tempo")
-                    tempo_decorrido = st.empty()
-                    tempo_restante = st.empty()
-                    media_empresa = st.empty()
-                    
-                    # Status atual
-                    status_atual = st.empty()
-                    
-                    start_time = time.time()
-                    tempos_processamento = []
-                    resultados = []
-                    
-                    for i, row in df.iterrows():
-                        item_start_time = time.time()
-                        
-                        # Atualiza status atual
-                        status_atual.text(f"🔄 Consultando: {row['Contratado']}")
-                        
-                        # Processa CNPJ
-                        cnpj = str(row['CPF/CNPJ']).strip()
-                        razao_social = str(row['Contratado']).strip()
-                        
-                        resultado = monitor.verificar_empresa(cnpj, razao_social)
-                        resultados.append(resultado)
-                        
-                        # Calcula métricas de tempo
-                        item_time = time.time() - item_start_time
-                        tempos_processamento.append(item_time)
-                        media_tempo = sum(tempos_processamento) / len(tempos_processamento)
-                        
-                        # Atualiza progresso e tempos
-                        progress = (i + 1) / total
-                        progress_bar.progress(progress)
-                        concluidos.markdown(f"✅ Concluído: {i+1}/{total} empresas")
-                        percentual.markdown(f"📊 Percentual: {progress*100:.0f}%")
-                        
-                        # Atualiza tempos no contexto principal
-                        tempo_atual = time.time() - start_time
-                        tempo_decorrido.markdown(f"⏰ Decorrido: {str(timedelta(seconds=int(tempo_atual)))}")
-                        
-                        tempo_estimado_restante = media_tempo * (total - (i + 1))
-                        tempo_restante.markdown(f"⏳ Estimado restante: {str(timedelta(seconds=int(tempo_estimado_restante)))}")
-                        media_empresa.markdown(f"⚡ Média por empresa: {str(timedelta(seconds=int(media_tempo)))}")
-                        
-                        # Força atualização da interface
-                        st.empty()
-                        time.sleep(0.1)
-                    
-                    status_atual.text("✅ Processamento concluído!")
-                    
-                    # Exibe resultados
-                    st.subheader("Resultados")
-                    for cnpj, resultado in zip(df['CPF/CNPJ'], resultados):
-                        if isinstance(resultado, dict):
-                            # Verifica se há alguma irregularidade em qualquer sistema
-                            sistemas_irregulares = []
-                            for sistema, res in resultado.items():
-                                if isinstance(res, dict) and not res.get('status', True):
-                                    sistemas_irregulares.append((sistema, res.get('observacoes', 'N/A')))
-                            
-                            if sistemas_irregulares:
-                                st.error(f"{cnpj}: Irregular em um ou mais sistemas")
-                                for sistema, obs in sistemas_irregulares:
-                                    st.write(f"- {sistema.upper()}: {obs}")
-                            else:
-                                st.success(f"{cnpj}: Regular em todos os sistemas")
-                        else:
-                            st.error(f"{cnpj}: Erro ao processar - {resultado}")
-                            
-                    # Gera relatório
-                    relatorio = RelatorioService()
-                    arquivo_relatorio = relatorio.gerar_relatorio_impedimentos(
-                        {row['CPF/CNPJ']: resultado for row, resultado in zip(df.itertuples(), resultados)}
-                    )
-                    
-                    if arquivo_relatorio:
-                        st.success(f"Relatório gerado: {arquivo_relatorio}")
-                        
-                        # Configurações de e-mail (pode vir de variáveis de ambiente)
-                        email_service = EmailService(
-                            smtp_server="smtp.gmail.com",
-                            smtp_port=587,
-                            username=st.secrets["email"]["username"],
-                            password=st.secrets["email"]["password"]
-                        )
-                        
-                        # Lista de destinatários (pode vir de configuração)
-                        destinatarios = st.secrets["email"]["destinatarios"]
-                        
-                        if email_service.enviar_relatorio(destinatarios, arquivo_relatorio):
-                            st.success("Relatório enviado por e-mail com sucesso!")
-                        else:
-                            st.error("Erro ao enviar relatório por e-mail")
-                            
-        except Exception as e:
-            st.error(f"Erro ao processar arquivo: {str(e)}") 
+
+    # ── Relatório ─────────────────────────────────────────────────────────────
+    try:
+        relatorio = RelatorioService()
+        dados_relatorio = []
+        for idx in range(total):
+            row       = df_proc.iloc[idx]
+            resultado = resultados[idx]
+            if isinstance(resultado, dict) and "error" not in resultado:
+                dados_relatorio.append({
+                    "cnpj":        row["_cnpj_clean"],
+                    "razao_social": str(row[col_nome]).strip() if col_nome else "",
+                    **{k: v for k, v in resultado.items() if k not in ("status", "empresa_id")},
+                })
+        arquivo = relatorio.gerar_relatorio_impedimentos(dados_relatorio)
+        if arquivo:
+            st.success(f"Relatório gerado: {arquivo}")
+    except Exception as e:
+        st.warning(f"Relatório não gerado: {e}")

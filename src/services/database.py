@@ -83,6 +83,101 @@ class DatabaseService:
             logging.error(f"Erro ao registrar monitoramento: {e}")
             return None
 
+    def obter_empresa_id(self, cnpj: str):
+        try:
+            response = self.supabase.table('empresas').select('id').eq('cnpj', cnpj).execute()
+            if response.data:
+                return response.data[0]['id']
+            return None
+        except Exception as e:
+            logging.error(f"Erro ao obter empresa_id: {e}")
+            return None
+
+    def listar_certidoes(self, status: str = "Todas", tipo: str = "Todas"):
+        try:
+            query = self.supabase.table('certidoes').select('*, empresas(cnpj, razao_social)')
+            if tipo != "Todas":
+                query = query.eq('tipo', tipo)
+            response = query.order('data_validade').execute()
+
+            hoje = datetime.now().date()
+            empresas_map = {}
+            for cert in (response.data or []):
+                empresa_info = cert.get('empresas') or {}
+                cnpj = empresa_info.get('cnpj', '')
+                razao_social = empresa_info.get('razao_social', '')
+
+                try:
+                    validade = datetime.fromisoformat(cert['data_validade']).date()
+                    dias_restantes = (validade - hoje).days
+                    if status == "Vencidas" and dias_restantes >= 0:
+                        continue
+                    if status == "A vencer em 30 dias" and not (0 <= dias_restantes <= 30):
+                        continue
+                    if status == "Regulares" and dias_restantes < 0:
+                        continue
+                except (ValueError, KeyError):
+                    pass
+
+                if cnpj not in empresas_map:
+                    empresas_map[cnpj] = {'cnpj': cnpj, 'razao_social': razao_social, 'certidoes': []}
+                empresas_map[cnpj]['certidoes'].append(cert)
+
+            return list(empresas_map.values())
+        except Exception as e:
+            logging.error(f"Erro ao listar certidões: {e}")
+            return []
+
+    def adicionar_certidao(self, empresa_id: int, tipo: str, data_emissao,
+                           data_validade, numero_certidao: str = None, arquivo=None):
+        try:
+            arquivo_url = None
+            if arquivo is not None:
+                bucket = self.supabase.storage.from_('certidoes')
+                filename = f"{empresa_id}_{tipo}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
+                bucket.upload(filename, arquivo.read(), {'content-type': 'application/pdf'})
+                arquivo_url = bucket.get_public_url(filename)
+
+            data = {
+                'empresa_id': empresa_id,
+                'tipo': tipo,
+                'data_emissao': data_emissao.isoformat() if hasattr(data_emissao, 'isoformat') else str(data_emissao),
+                'data_validade': data_validade.isoformat() if hasattr(data_validade, 'isoformat') else str(data_validade),
+                'numero_certidao': numero_certidao,
+                'arquivo_url': arquivo_url,
+            }
+            response = self.supabase.table('certidoes').insert(data).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logging.error(f"Erro ao adicionar certidão: {e}")
+            return None
+
+    def excluir_certidao(self, certidao_id: int) -> bool:
+        try:
+            self.supabase.table('certidoes').delete().eq('id', certidao_id).execute()
+            return True
+        except Exception as e:
+            logging.error(f"Erro ao excluir certidão {certidao_id}: {e}")
+            return False
+
+    def listar_certidoes_proximas(self, dias: int = 30) -> list:
+        """Retorna certidões que vencem nos próximos `dias` dias ou já vencidas."""
+        from datetime import date, timedelta
+        hoje = date.today()
+        limite = hoje + timedelta(days=dias)
+        try:
+            resp = (
+                self.supabase.table('certidoes')
+                .select('*, empresas(cnpj, razao_social)')
+                .lte('data_validade', limite.isoformat())
+                .order('data_validade')
+                .execute()
+            )
+            return resp.data or []
+        except Exception as e:
+            logging.error(f"Erro ao listar certidões próximas: {e}")
+            return []
+
     def limpar_base_dados(self):
         """Limpa as tabelas do banco de dados na ordem correta"""
         try:

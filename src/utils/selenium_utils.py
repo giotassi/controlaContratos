@@ -1,7 +1,10 @@
+import platform
+import shutil
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 
-def get_chrome_options():
-    """Retorna opções padrão do Chrome para web scraping"""
+
+def get_chrome_options() -> Options:
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
@@ -9,5 +12,23 @@ def get_chrome_options():
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-extensions")
-    options.add_experimental_option('excludeSwitches', ['enable-logging'])
-    return options 
+    options.add_experimental_option("excludeSwitches", ["enable-logging"])
+
+    # Linux (Streamlit Cloud): usa o Chromium do sistema
+    if platform.system() == "Linux":
+        chromium = shutil.which("chromium-browser") or shutil.which("chromium")
+        if chromium:
+            options.binary_location = chromium
+
+    return options
+
+
+def get_chrome_service() -> Service:
+    """Retorna o Service correto para o ambiente atual."""
+    if platform.system() == "Linux":
+        chromedriver = shutil.which("chromedriver")
+        if chromedriver:
+            return Service(chromedriver)
+
+    from webdriver_manager.chrome import ChromeDriverManager
+    return Service(ChromeDriverManager().install())
