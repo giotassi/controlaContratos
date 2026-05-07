@@ -55,20 +55,23 @@ def render():
             resultado_transparencia = transparencia_service.consultar(cnpj_formatado)
             if resultado_transparencia:
                 st.subheader("Portal da Transparência")
-                col1, col2, col3 = st.columns(3)
-                sistemas_transp = [
-                    (col1, "CEIS", "ceis"),
-                    (col2, "CNEP", "cnep"),
-                    (col3, "CEPIM", "cepim"),
-                ]
-                for col, label, key in sistemas_transp:
-                    with col:
-                        st.write(label)
-                        status = resultado_transparencia[key]['status']
-                        if status is None:
-                            st.warning("⚠️ Não disponível")
-                        elif status:
-                            st.success("✅ Regular")
-                        else:
-                            st.error("❌ Irregular")
-                        st.info(resultado_transparencia[key]['observacoes'])
+                # Verifica se API está configurada (todos os status None = sem chave)
+                sem_api = all(v['status'] is None for v in resultado_transparencia.values())
+                if sem_api:
+                    st.info("ℹ️ Consulta ao Portal da Transparência (CEIS/CNEP/CEPIM) não disponível — API_KEY não configurada.")
+                else:
+                    col1, col2, col3 = st.columns(3)
+                    sistemas_transp = [
+                        (col1, "CEIS", "ceis"),
+                        (col2, "CNEP", "cnep"),
+                        (col3, "CEPIM", "cepim"),
+                    ]
+                    for col, label, key in sistemas_transp:
+                        with col:
+                            st.write(label)
+                            status = resultado_transparencia[key]['status']
+                            if status:
+                                st.success("✅ Regular")
+                            else:
+                                st.error("❌ Irregular")
+                            st.info(resultado_transparencia[key]['observacoes'])
