@@ -19,64 +19,54 @@ class MonitorService:
         self.transparencia = TransparenciaService()
         logging.info("MonitorService inicializado")
         
-    def verificar_empresa(self, cnpj: str, razao_social: str = None):
-        """
-        Verifica uma empresa em todos os serviços
-        Args:
-            cnpj: CNPJ da empresa
-            razao_social: Nome da empresa (opcional)
-        """
+    def verificar_empresa(self, cnpj: str, razao_social: str = None, incluir_cadin: bool = True):
+        """Verifica uma empresa em todos os serviços."""
         try:
-            logging.info(f"Iniciando verificação para CNPJ: {cnpj}")
-            
-            # Formata o CNPJ antes de validar
             cnpj_formatado = format_cnpj(cnpj)
-            logging.info(f"CNPJ formatado: {cnpj_formatado}")
-            
             if not validate_cnpj(cnpj_formatado):
-                logging.warning(f"CNPJ inválido: {cnpj_formatado}")
                 return {"error": "CNPJ inválido"}
 
-            # Consulta Portal da Transparência
-            logging.info("Iniciando consulta Portal da Transparência")
-            resultado_transparencia = self.transparencia.consultar(cnpj, razao_social)
-            
-            if not resultado_transparencia:
-                logging.error("Erro ao consultar Portal da Transparência")
-                return {"error": "Erro ao consultar Portal da Transparência"}
-                
-            logging.info(f"Resultado Portal da Transparência: {resultado_transparencia}")
-            
-            # Consulta CADIN/CFIL
-            logging.info("Iniciando consulta CADIN/CFIL")
-            resultado_cadin = self.cadin.consultar(cnpj_formatado)
-            
-            if not resultado_cadin:
-                logging.error("Erro ao consultar CADIN/CFIL")
-                return {"error": "Erro ao consultar CADIN/CFIL"}
-                
-            logging.info(f"Resultado CADIN/CFIL: {resultado_cadin}")
-            
-            # Combina os resultados e determina o status geral
-            resultado_combinado = {
-                **resultado_transparencia,
-                **resultado_cadin
-            }
-            
-            # Status geral é True apenas se todos os serviços retornarem True
-            status_geral = all([
-                resultado_transparencia.get('ceis', {}).get('status', False),
-                resultado_transparencia.get('cnep', {}).get('status', False),
-                resultado_transparencia.get('cepim', {}).get('status', False),
-                resultado_cadin.get('cadin', {}).get('status', False),
-                resultado_cadin.get('cfil', {}).get('status', False)
-            ])
-            
-            resultado_combinado['status'] = status_geral
+            # Portal da Transparência (CEIS, CNEP, CEPIM)
+            try:
+                resultado_transparencia = self.transparencia.consultar(cnpj, razao_social) or {}
+            except Exception as e:
+                logging.error(f"Erro Transparência {cnpj}: {e}")
+                resultado_transparencia = {
+                    s: {'status': None, 'observacoes': f'Erro: {e}'}
+                    for s in ['ceis', 'cnep', 'cepim']
+                }
+
+            # CADIN / CFIL (opcional)
+            if incluir_cadin:
+                try:
+                    resultado_cadin = self.cadin.consultar(cnpj_formatado) or {}
+                except Exception as e:
+                    logging.error(f"Erro CADIN {cnpj}: {e}")
+                    resultado_cadin = {
+                        s: {'status': None, 'observacoes': f'Erro: {e}'}
+                        for s in ['cadin', 'cfil']
+                    }
+            else:
+                resultado_cadin = {
+                    'cadin': {'status': None, 'observacoes': 'Não consultado'},
+                    'cfil':  {'status': None, 'observacoes': 'Não consultado'},
+                }
+
+            resultado_combinado = {**resultado_transparencia, **resultado_cadin}
+
+            # Status geral: ignora campos None (não consultados / sem API)
+            statuses = [
+                v.get('status')
+                for k, v in resultado_combinado.items()
+                if isinstance(v, dict) and k not in ('empresa_id',)
+            ]
+            consultados = [s for s in statuses if s is not None]
+            resultado_combinado['status'] = all(consultados) if consultados else None
+
             return resultado_combinado
 
         except Exception as e:
-            logging.error(f"Erro ao verificar empresa: {str(e)}", exc_info=True)
+            logging.error(f"Erro ao verificar empresa {cnpj}: {e}", exc_info=True)
             return {"error": str(e)}
             
     def buscar_impedimentos(self, data_limite, apenas_ativos=True):
