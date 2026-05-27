@@ -1,11 +1,12 @@
-import streamlit as st
-from services.monitor import MonitorService
-from services.tcu_apf import TCUAPFService
-import pandas as pd
 import time
 from datetime import timedelta
+
+import pandas as pd
+import streamlit as st
+
+from services.monitor import MonitorService
 from services.relatorio import RelatorioService
-from views.cadin_auth import exibir_status_cadin
+from services.tcu_apf import TCUAPFService
 
 _CNPJ_COLS = ["cpf/cnpj", "cnpj", "cpf", "documento", "cpf / cnpj", "cpf_cnpj"]
 _NOME_COLS = ["contratado", "razão social", "razao social", "empresa", "nome", "fornecedor"]
@@ -31,8 +32,6 @@ def _limpar_cnpj(valor) -> str:
 def render():
     st.header("Consulta em Lote")
 
-    exibir_status_cadin()
-
     monitor = MonitorService()
     tcu_service = TCUAPFService()
 
@@ -52,36 +51,35 @@ def render():
         return
 
     st.write("Preview:")
-    st.dataframe(df.head())
+    st.dataframe(df.head(), use_container_width=True)
 
-    # ── Detecção de colunas ───────────────────────────────────────────────────
     col_cnpj = _detectar_coluna(df, _CNPJ_COLS)
     col_nome = _detectar_coluna(df, _NOME_COLS)
-    colunas  = list(df.columns)
+    colunas = list(df.columns)
 
     c1, c2 = st.columns(2)
     with c1:
-        col_cnpj = st.selectbox("Coluna de CNPJ", colunas,
-                                index=colunas.index(col_cnpj) if col_cnpj else 0)
+        col_cnpj = st.selectbox(
+            "Coluna de CNPJ",
+            colunas,
+            index=colunas.index(col_cnpj) if col_cnpj else 0,
+        )
     with c2:
-        col_nome = st.selectbox("Coluna de Razão Social", colunas,
-                                index=colunas.index(col_nome) if col_nome else 0)
+        col_nome = st.selectbox(
+            "Coluna de Razão Social",
+            colunas,
+            index=colunas.index(col_nome) if col_nome else 0,
+        )
 
     incluir_cadin = st.checkbox(
-        "Incluir CADIN/RS na consulta (requer autenticação acima)",
-        value=False,
-        help="Desmarque para pular o CADIN e evitar alertas de sessão não autenticada.",
-    )
-    emitir_pdf_tcu = st.checkbox(
-        "Emitir PDFs consolidados do TCU para a planilha",
-        value=False,
-        help="Deixe desmarcado para a consulta rapida. Marque apenas quando precisar anexar as certidoes consolidadas.",
+        "Incluir CADIN/RS na consulta",
+        value=True,
+        help="Desmarque apenas se quiser acelerar o lote pulando o CADIN/RS.",
     )
 
     if not st.button("Processar Planilha", type="primary"):
         return
 
-    # ── Prepara linhas válidas ────────────────────────────────────────────────
     df_proc = df.copy()
     df_proc["_cnpj_clean"] = df_proc[col_cnpj].apply(_limpar_cnpj)
     linhas_originais = len(df_proc)
@@ -91,57 +89,68 @@ def render():
         st.error(f"Nenhuma linha com CNPJ válido na coluna '{col_cnpj}'.")
         return
     if len(df_proc) < linhas_originais:
-        st.warning(f"{linhas_originais - len(df_proc)} linha(s) ignorada(s) por documento vazio ou com tamanho invalido.")
+        st.warning(
+            f"{linhas_originais - len(df_proc)} linha(s) ignorada(s) por documento vazio ou com tamanho inválido."
+        )
 
     total = len(df_proc)
-
-    # ── Progresso ─────────────────────────────────────────────────────────────
     st.subheader("Progresso")
-    progress_bar  = st.progress(0.0)
+    progress_bar = st.progress(0.0)
     txt_progresso = st.empty()
-    txt_tempo     = st.empty()
-    txt_status    = st.empty()
+    txt_tempo = st.empty()
+    txt_status = st.empty()
 
     start_time = time.time()
     tempos: list[float] = []
-    resultados: list    = []
-    pdfs_tcu: list       = []
+    resultados: list = []
+    pdfs_tcu: list = []
+    pdfs_cadin: list = []
 
     for idx in range(total):
-        row   = df_proc.iloc[idx]
-        cnpj  = row["_cnpj_clean"]
+        row = df_proc.iloc[idx]
+        cnpj = row["_cnpj_clean"]
         razao = str(row[col_nome]).strip() if col_nome else cnpj
 
-        txt_status.info(f"🔄 ({idx + 1}/{total}) {razao}")
-
+        txt_status.info(f"({idx + 1}/{total}) {razao}")
         t0 = time.time()
         pdf_tcu = None
+        pdf_cadin = None
+
         try:
             resultado = monitor.verificar_empresa(cnpj, razao, incluir_cadin=incluir_cadin)
-            if emitir_pdf_tcu:
-                consulta_tcu = tcu_service.consultar(cnpj, emitir_pdf=True)
-                if consulta_tcu.get("error"):
-                    pdf_tcu = {"error": consulta_tcu["error"]}
-                else:
-                    pdf_tcu = consulta_tcu.get("pdf_bytes")
+
+            consulta_tcu = tcu_service.consultar(cnpj, emitir_pdf=False)
+            if consulta_tcu and not consulta_tcu.get("error") and tcu_service.tem_restricao(consulta_tcu):
+                certidao_tcu = tcu_service.consultar(cnpj, emitir_pdf=True)
+                pdf_tcu = certidao_tcu.get("pdf_bytes") or {"error": certidao_tcu.get("error", "sem retorno")}
+
+            if incluir_cadin and isinstance(resultado, dict):
+                dados_cadin = resultado.get("cadin") or {}
+                if dados_cadin.get("status") is False:
+                    certidao_cadin = monitor.cadin.emitir_certidao_cadin(cnpj)
+                    pdf_cadin = certidao_cadin.get("pdf_bytes") or {
+                        "error": certidao_cadin.get("error", "sem retorno")
+                    }
         except Exception as e:
             resultado = {"error": str(e)}
             txt_status.error(f"Erro em {razao}: {e}")
+
         resultados.append(resultado)
         pdfs_tcu.append(pdf_tcu)
+        pdfs_cadin.append(pdf_cadin)
 
         elapsed_item = time.time() - t0
         tempos.append(elapsed_item)
-        media     = sum(tempos) / len(tempos)
+        media = sum(tempos) / len(tempos)
         decorrido = time.time() - start_time
-        restante  = media * (total - (idx + 1))
+        restante = media * (total - (idx + 1))
 
         progress_bar.progress((idx + 1) / total)
         txt_progresso.markdown(f"**{idx + 1} / {total}** empresas processadas")
         txt_tempo.markdown(
-            f"⏰ Decorrido: **{str(timedelta(seconds=int(decorrido)))}** &nbsp;|&nbsp; "
-            f"⏳ Restante: **{str(timedelta(seconds=int(restante)))}** &nbsp;|&nbsp; "
-            f"⚡ Média: **{media:.1f}s/empresa**"
+            f"Decorrido: **{str(timedelta(seconds=int(decorrido)))}** | "
+            f"Restante: **{str(timedelta(seconds=int(restante)))}** | "
+            f"Média: **{media:.1f}s/empresa**"
         )
 
     try:
@@ -149,20 +158,18 @@ def render():
     except Exception:
         pass
 
-    txt_status.success("✅ Processamento concluído!")
+    txt_status.success("Processamento concluído!")
 
-    # ── Resumo ─────────────────────────────────────────────────────────────────
     st.subheader("Resumo dos Resultados")
-
     irregulares_list = []
-    erros_list       = []
-    regulares        = 0
+    erros_list = []
+    regulares = 0
 
     for idx in range(total):
-        row    = df_proc.iloc[idx]
-        cnpj   = row["_cnpj_clean"]
-        razao  = str(row[col_nome]).strip() if col_nome else cnpj
-        res    = resultados[idx]
+        row = df_proc.iloc[idx]
+        cnpj = row["_cnpj_clean"]
+        razao = str(row[col_nome]).strip() if col_nome else cnpj
+        res = resultados[idx]
 
         if not isinstance(res, dict) or "error" in res:
             erros_list.append({
@@ -178,64 +185,68 @@ def render():
                 continue
             if not incluir_cadin and sistema.lower() in ("cadin", "cfil"):
                 continue
-            s = dados.get("status")
-            if s is False:
+            if dados.get("status") is False:
                 sistemas_irreg.append({
                     "Sistema": sistema.upper(),
                     "Observações": dados.get("observacoes", ""),
                 })
 
         if sistemas_irreg:
-            irregulares_list.append({
-                "empresa": razao,
-                "cnpj": cnpj,
-                "sistemas": sistemas_irreg,
-            })
+            irregulares_list.append({"empresa": razao, "cnpj": cnpj, "sistemas": sistemas_irreg})
         else:
             regulares += 1
 
-    # Métricas
     m1, m2, m3 = st.columns(3)
     m1.metric("Total processado", total)
-    m2.metric("Com impedimento", len(irregulares_list), delta=None)
+    m2.metric("Com impedimento", len(irregulares_list))
     m3.metric("Regulares", regulares)
 
     if erros_list:
-        st.warning(f"⚠️ {len(erros_list)} empresa(s) com erro de consulta:")
+        st.warning(f"{len(erros_list)} empresa(s) com erro de consulta:")
         st.dataframe(pd.DataFrame(erros_list), use_container_width=True)
 
-    if emitir_pdf_tcu:
-        st.subheader("PDFs consolidados do TCU")
-        pdfs_emitidos = 0
-        for idx, pdf in enumerate(pdfs_tcu):
-            row = df_proc.iloc[idx]
-            cnpj = row["_cnpj_clean"]
-            razao = str(row[col_nome]).strip() if col_nome else cnpj
-            if isinstance(pdf, bytes):
-                pdfs_emitidos += 1
-                st.download_button(
-                    f"Baixar PDF TCU - {razao}",
-                    data=pdf,
-                    file_name=f"certidao_tcu_{cnpj}.pdf",
-                    mime="application/pdf",
-                    key=f"pdf_tcu_{idx}",
-                )
-            elif isinstance(pdf, dict) and pdf.get("error"):
-                st.warning(f"{razao}: PDF do TCU nao emitido ({pdf['error']})")
-        if pdfs_emitidos == 0:
-            st.info("Nenhum PDF do TCU foi emitido.")
+    st.subheader("Certidões geradas automaticamente")
+    certidoes_emitidas = 0
+    for idx, (pdf_tcu, pdf_cadin) in enumerate(zip(pdfs_tcu, pdfs_cadin)):
+        row = df_proc.iloc[idx]
+        cnpj = row["_cnpj_clean"]
+        razao = str(row[col_nome]).strip() if col_nome else cnpj
+        if isinstance(pdf_tcu, bytes):
+            certidoes_emitidas += 1
+            st.download_button(
+                f"Baixar TCU - {razao}",
+                data=pdf_tcu,
+                file_name=f"certidao_tcu_{cnpj}.pdf",
+                mime="application/pdf",
+                key=f"pdf_tcu_{idx}",
+            )
+        elif isinstance(pdf_tcu, dict) and pdf_tcu.get("error"):
+            st.warning(f"{razao}: PDF TCU não emitido ({pdf_tcu['error']})")
 
-    # Tabela de impedimentos
+        if isinstance(pdf_cadin, bytes):
+            certidoes_emitidas += 1
+            st.download_button(
+                f"Baixar CADIN/RS - {razao}",
+                data=pdf_cadin,
+                file_name=f"certidao_cadin_rs_{cnpj}.pdf",
+                mime="application/pdf",
+                key=f"pdf_cadin_{idx}",
+            )
+        elif isinstance(pdf_cadin, dict) and pdf_cadin.get("error"):
+            st.warning(f"{razao}: certidão CADIN/RS não emitida ({pdf_cadin['error']})")
+
+    if certidoes_emitidas == 0:
+        st.info("Nenhuma restrição em TCU ou CADIN/RS exigiu emissão de certidão.")
+
     if irregulares_list:
-        st.error(f"### ❌ Empresas com impedimento ({len(irregulares_list)})")
+        st.error(f"### Empresas com impedimento ({len(irregulares_list)})")
         for item in irregulares_list:
-            with st.expander(f"❌ {item['empresa']} — {item['cnpj']}"):
-                for s in item["sistemas"]:
-                    st.markdown(f"**{s['Sistema']}:** {s['Observações']}")
+            with st.expander(f"{item['empresa']} — {item['cnpj']}"):
+                for sistema in item["sistemas"]:
+                    st.markdown(f"**{sistema['Sistema']}:** {sistema['Observações']}")
     else:
-        st.success("✅ Nenhum impedimento encontrado nas empresas consultadas.")
+        st.success("Nenhum impedimento encontrado nas empresas consultadas.")
 
-    # ── Relatório ─────────────────────────────────────────────────────────────
     try:
         relatorio = RelatorioService()
         dados_relatorio = []
@@ -244,7 +255,7 @@ def render():
             res = resultados[idx]
             if isinstance(res, dict) and "error" not in res:
                 dados_relatorio.append({
-                    "cnpj":        row["_cnpj_clean"],
+                    "cnpj": row["_cnpj_clean"],
                     "razao_social": str(row[col_nome]).strip() if col_nome else "",
                     **{k: v for k, v in res.items() if k not in ("status", "empresa_id")},
                 })

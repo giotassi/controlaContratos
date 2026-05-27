@@ -274,6 +274,20 @@ class CADINService:
             logger.error("Erro CADIN direto para %s: %s", cnpj, e, exc_info=True)
             return {"status": None, "observacoes": f"Erro na consulta CADIN/RS: {e}"}
 
+    def emitir_certidao_cadin(self, cnpj: str) -> dict:
+        try:
+            response = requests.post(
+                f"{self.CADIN_URL.rstrip('/')}/api/Certidao/EmitirCertidao",
+                json={"Documento": cnpj},
+                headers={"Accept": "application/pdf"},
+                timeout=30,
+            )
+            response.raise_for_status()
+            return {"pdf_bytes": response.content}
+        except Exception as e:
+            logger.error("Erro ao emitir certidao CADIN/RS para %s: %s", cnpj, e)
+            return {"error": str(e)}
+
     def _formatar_cadin(self, registros: list[dict]) -> str:
         linhas = []
         for item in registros:

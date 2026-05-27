@@ -9,6 +9,13 @@ logger = logging.getLogger(__name__)
 class TCUAPFService:
     BASE_URL = "https://certidoes-apf.apps.tcu.gov.br/api/rest/publico"
 
+    @staticmethod
+    def tem_restricao(resultado: dict) -> bool:
+        return any(
+            str(certidao.get("situacao", "")).upper() != "NADA_CONSTA"
+            for certidao in resultado.get("certidoes", [])
+        )
+
     def consultar(self, cnpj: str, emitir_pdf: bool = False) -> dict:
         digits = "".join(c for c in str(cnpj) if c.isdigit())
         try:
