@@ -1,5 +1,6 @@
 import streamlit as st
 from services.monitor import MonitorService
+from services.tcu_apf import TCUAPFService
 import pandas as pd
 import time
 from datetime import timedelta
@@ -33,6 +34,7 @@ def render():
     exibir_status_cadin()
 
     monitor = MonitorService()
+    tcu_service = TCUAPFService()
 
     uploaded_file = st.file_uploader(
         "Escolha uma planilha Excel",
@@ -70,6 +72,11 @@ def render():
         value=False,
         help="Desmarque para pular o CADIN e evitar alertas de sessão não autenticada.",
     )
+    emitir_pdf_tcu = st.checkbox(
+        "Emitir PDFs consolidados do TCU para a planilha",
+        value=False,
+        help="Deixe desmarcado para a consulta rapida. Marque apenas quando precisar anexar as certidoes consolidadas.",
+    )
 
     if not st.button("Processar Planilha", type="primary"):
         return
@@ -77,11 +84,14 @@ def render():
     # ── Prepara linhas válidas ────────────────────────────────────────────────
     df_proc = df.copy()
     df_proc["_cnpj_clean"] = df_proc[col_cnpj].apply(_limpar_cnpj)
+    linhas_originais = len(df_proc)
     df_proc = df_proc[df_proc["_cnpj_clean"].str.len().isin([11, 14])].reset_index(drop=True)
 
     if df_proc.empty:
         st.error(f"Nenhuma linha com CNPJ válido na coluna '{col_cnpj}'.")
         return
+    if len(df_proc) < linhas_originais:
+        st.warning(f"{linhas_originais - len(df_proc)} linha(s) ignorada(s) por documento vazio ou com tamanho invalido.")
 
     total = len(df_proc)
 
@@ -95,6 +105,7 @@ def render():
     start_time = time.time()
     tempos: list[float] = []
     resultados: list    = []
+    pdfs_tcu: list       = []
 
     for idx in range(total):
         row   = df_proc.iloc[idx]
@@ -104,11 +115,20 @@ def render():
         txt_status.info(f"🔄 ({idx + 1}/{total}) {razao}")
 
         t0 = time.time()
+        pdf_tcu = None
         try:
             resultado = monitor.verificar_empresa(cnpj, razao, incluir_cadin=incluir_cadin)
+            if emitir_pdf_tcu:
+                consulta_tcu = tcu_service.consultar(cnpj, emitir_pdf=True)
+                if consulta_tcu.get("error"):
+                    pdf_tcu = {"error": consulta_tcu["error"]}
+                else:
+                    pdf_tcu = consulta_tcu.get("pdf_bytes")
         except Exception as e:
             resultado = {"error": str(e)}
+            txt_status.error(f"Erro em {razao}: {e}")
         resultados.append(resultado)
+        pdfs_tcu.append(pdf_tcu)
 
         elapsed_item = time.time() - t0
         tempos.append(elapsed_item)
@@ -123,6 +143,11 @@ def render():
             f"⏳ Restante: **{str(timedelta(seconds=int(restante)))}** &nbsp;|&nbsp; "
             f"⚡ Média: **{media:.1f}s/empresa**"
         )
+
+    try:
+        monitor.cadin.fechar()
+    except Exception:
+        pass
 
     txt_status.success("✅ Processamento concluído!")
 
@@ -178,6 +203,27 @@ def render():
     if erros_list:
         st.warning(f"⚠️ {len(erros_list)} empresa(s) com erro de consulta:")
         st.dataframe(pd.DataFrame(erros_list), use_container_width=True)
+
+    if emitir_pdf_tcu:
+        st.subheader("PDFs consolidados do TCU")
+        pdfs_emitidos = 0
+        for idx, pdf in enumerate(pdfs_tcu):
+            row = df_proc.iloc[idx]
+            cnpj = row["_cnpj_clean"]
+            razao = str(row[col_nome]).strip() if col_nome else cnpj
+            if isinstance(pdf, bytes):
+                pdfs_emitidos += 1
+                st.download_button(
+                    f"Baixar PDF TCU - {razao}",
+                    data=pdf,
+                    file_name=f"certidao_tcu_{cnpj}.pdf",
+                    mime="application/pdf",
+                    key=f"pdf_tcu_{idx}",
+                )
+            elif isinstance(pdf, dict) and pdf.get("error"):
+                st.warning(f"{razao}: PDF do TCU nao emitido ({pdf['error']})")
+        if pdfs_emitidos == 0:
+            st.info("Nenhum PDF do TCU foi emitido.")
 
     # Tabela de impedimentos
     if irregulares_list:

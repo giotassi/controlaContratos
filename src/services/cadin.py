@@ -1,6 +1,7 @@
 import logging
 import time
 from datetime import datetime
+import requests
 from services.database import DatabaseService
 
 logger = logging.getLogger(__name__)
@@ -9,6 +10,7 @@ logger = logging.getLogger(__name__)
 class CADINService:
     TRANSPARENCIA_URL = "https://www.transparencia.rs.gov.br/licitacoes-e-sancoes/lista-de-sancionados/dados/"
     CADIN_URL = "https://cadin.sefaz.rs.gov.br/"
+    CADIN_DETALHE_URL = "https://cadin.sefaz.rs.gov.br/api/pessoa/infoPessoa"
 
     def __init__(self):
         self.db = DatabaseService()
@@ -241,8 +243,51 @@ class CADINService:
     # ------------------------------------------------------------------
 
     def _consultar_cadin(self, cnpj: str) -> dict:
-        from utils.cadin_session import consultar_cnpj
-        return consultar_cnpj(cnpj)
+        try:
+            response = requests.get(
+                self.CADIN_DETALHE_URL,
+                params={"code": cnpj},
+                headers={"Accept": "application/json"},
+                timeout=30,
+            )
+            if response.status_code == 400:
+                return {
+                    "status": True,
+                    "observacoes": "Regular — não inscrito no CADIN/RS",
+                }
+            response.raise_for_status()
+            registros = response.json() if response.text.strip() else []
+            ativos = [
+                item for item in registros
+                if str(item.get("sitPend", "")).strip().lower() == "ativo"
+            ]
+            if not ativos:
+                return {
+                    "status": True,
+                    "observacoes": "Regular — registros encontrados, mas nenhum ativo no CADIN/RS",
+                }
+            return {
+                "status": False,
+                "observacoes": self._formatar_cadin(ativos),
+            }
+        except Exception as e:
+            logger.error("Erro CADIN direto para %s: %s", cnpj, e, exc_info=True)
+            return {"status": None, "observacoes": f"Erro na consulta CADIN/RS: {e}"}
+
+    def _formatar_cadin(self, registros: list[dict]) -> str:
+        linhas = []
+        for item in registros:
+            partes = [
+                f"Órgão/Entidade: {str(item.get('nomeOrgao', '')).strip() or 'N/A'}",
+                f"UO: {str(item.get('nomeUO', '')).strip() or 'N/A'}",
+                f"Situação: {str(item.get('sitPend', '')).strip() or 'N/A'}",
+                f"Fluxo: {str(item.get('sitFluxo', '')).strip() or 'N/A'}",
+                f"Início: {str(item.get('dtIniPend', '')).strip() or 'N/A'}",
+                f"Vencimento: {str(item.get('dtVencto', '')).strip() or 'N/A'}",
+                f"Descrição: {str(item.get('descricao', '')).strip() or 'N/A'}",
+            ]
+            linhas.append(" | ".join(partes))
+        return "\n".join(linhas)
 
     # ------------------------------------------------------------------
     # Banco de dados

@@ -24,7 +24,6 @@ def test_verificar_empresa_sucesso(monitor_service):
     monitor_service.transparencia.consultar.return_value = {
         'ceis': {'status': True, 'observacoes': 'Regular'},
         'cnep': {'status': True, 'observacoes': 'Regular'},
-        'cepim': {'status': True, 'observacoes': 'Regular'},
         'empresa_id': 1,
     }
     monitor_service.cadin.consultar.return_value = {

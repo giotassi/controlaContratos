@@ -26,14 +26,14 @@ class MonitorService:
             if not validate_cnpj(cnpj_formatado):
                 return {"error": "CNPJ inválido"}
 
-            # Portal da Transparência (CEIS, CNEP, CEPIM)
+            # Portal da Transparencia (CEIS, CNEP)
             try:
                 resultado_transparencia = self.transparencia.consultar(cnpj, razao_social) or {}
             except Exception as e:
                 logging.error(f"Erro Transparência {cnpj}: {e}")
                 resultado_transparencia = {
                     s: {'status': None, 'observacoes': f'Erro: {e}'}
-                    for s in ['ceis', 'cnep', 'cepim']
+                    for s in ['ceis', 'cnep']
                 }
 
             # CADIN / CFIL (opcional)
