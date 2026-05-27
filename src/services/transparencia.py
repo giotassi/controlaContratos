@@ -40,7 +40,7 @@ class TransparenciaService:
         except Exception:
             return False
 
-    def consultar(self, cnpj: str, razao_social: str = None):
+    def consultar(self, cnpj: str, razao_social: str = None, salvar: bool = False):
         if not self.api_key:
             return {
                 sistema: {"status": None, "observacoes": "API não configurada"}
@@ -57,7 +57,7 @@ class TransparenciaService:
                 response = self._consultar_sistema(sistema, cnpj)
                 if response.status_code != 200:
                     resultados[sistema] = {
-                        "status": False,
+                        "status": None,
                         "observacoes": f"Erro HTTP {response.status_code}",
                     }
                     continue
@@ -65,12 +65,13 @@ class TransparenciaService:
                 dados = response.json() if response.text.strip() else []
                 status = len(dados) == 0
                 observacoes = getattr(self, f"_formatar_{sistema}")(dados) if dados else "Regular"
-                self._salvar_monitoramento(empresa_id, sistema, status, observacoes)
+                if salvar:
+                    self._salvar_monitoramento(empresa_id, sistema, status, observacoes)
                 resultados[sistema] = {"status": status, "observacoes": observacoes}
             except Exception as e:
                 logging.error("Erro ao consultar %s: %s", sistema, e)
                 resultados[sistema] = {
-                    "status": False,
+                    "status": None,
                     "observacoes": f"Erro na consulta: {e}",
                 }
 

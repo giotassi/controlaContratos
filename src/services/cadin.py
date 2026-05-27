@@ -21,7 +21,7 @@ class CADINService:
     # API pública
     # ------------------------------------------------------------------
 
-    def consultar(self, cnpj: str, incluir_cfil: bool = True) -> dict | None:
+    def consultar(self, cnpj: str, incluir_cfil: bool = True, salvar: bool = False) -> dict | None:
         """Consulta CADIN/RS e, opcionalmente, CFIL/RS para um CNPJ."""
         cnpj_digits = "".join(c for c in cnpj if c.isdigit())
         try:
@@ -32,7 +32,8 @@ class CADINService:
             else:
                 cfil = {"status": None, "observacoes": "Não consultado"}
             resultado = {"cadin": cadin, "cfil": cfil}
-            self._salvar_monitoramentos(empresa_id, resultado)
+            if salvar:
+                self._salvar_monitoramentos(empresa_id, resultado)
             return resultado
         except Exception as e:
             logger.error(f"Erro ao consultar CADIN/CFIL para {cnpj}: {e}", exc_info=True)
@@ -60,7 +61,7 @@ class CADINService:
             logger.error(f"Erro CFIL para {cnpj}: {e}", exc_info=True)
             self._cfil_driver = None
             self._cfil_ready = False
-            return {"status": False, "observacoes": f"Erro na consulta CFIL: {e}"}
+            return {"status": None, "observacoes": f"Erro na consulta CFIL: {e}"}
 
     def _obter_driver_cfil(self):
         """Retorna driver já na página do Power BI, carregando-a se necessário."""

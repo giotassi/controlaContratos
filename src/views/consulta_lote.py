@@ -31,18 +31,6 @@ def _limpar_cnpj(valor) -> str:
     return digits
 
 
-def _formatar_restricoes_tcu(restricoes: list[dict]) -> str:
-    return "\n".join(
-        " | ".join([
-            f"Tipo: {certidao.get('tipo', 'TCU')}",
-            f"Situação: {certidao.get('situacao', 'Restrição')}",
-            f"Emissor: {certidao.get('emissor', 'N/A')}",
-            f"Observação: {certidao.get('observacao') or 'N/A'}",
-        ])
-        for certidao in restricoes
-    )
-
-
 def _file_key(uploaded_file) -> str:
     data = uploaded_file.getvalue()
     return hashlib.sha256(data).hexdigest()
@@ -87,22 +75,9 @@ def _consultar_empresa(row, col_nome: str, incluir_cfil: bool, monitor: MonitorS
     pdf_tcu = None
     pdf_cadin = None
 
-    consulta_tcu = tcu_service.consultar(cnpj, emitir_pdf=False)
-    if consulta_tcu and not consulta_tcu.get("error"):
-        restricoes_tcu = [
-            certidao for certidao in consulta_tcu.get("certidoes", [])
-            if str(certidao.get("situacao", "")).upper() != "NADA_CONSTA"
-        ]
-        if isinstance(resultado, dict):
-            resultado["tcu"] = {
-                "status": not bool(restricoes_tcu),
-                "observacoes": _formatar_restricoes_tcu(restricoes_tcu) if restricoes_tcu else "Regular",
-            }
-        if restricoes_tcu:
-            certidao_tcu = tcu_service.consultar(cnpj, emitir_pdf=True)
-            pdf_tcu = certidao_tcu.get("pdf_bytes") or {"error": certidao_tcu.get("error", "sem retorno")}
-    elif consulta_tcu and consulta_tcu.get("error") and isinstance(resultado, dict):
-        resultado["tcu"] = {"status": None, "observacoes": consulta_tcu["error"]}
+    if isinstance(resultado, dict) and (resultado.get("tcu") or {}).get("status") is False:
+        certidao_tcu = tcu_service.consultar(cnpj, emitir_pdf=True)
+        pdf_tcu = certidao_tcu.get("pdf_bytes") or {"error": certidao_tcu.get("error", "sem retorno")}
 
     if isinstance(resultado, dict) and (resultado.get("cadin") or {}).get("status") is False:
         certidao_cadin = monitor.cadin.emitir_certidao_cadin(cnpj)
@@ -111,20 +86,21 @@ def _consultar_empresa(row, col_nome: str, incluir_cfil: bool, monitor: MonitorS
     return resultado, pdf_tcu, pdf_cadin
 
 
-def _processar_bloco(tamanho_bloco: int):
+def _processar_automaticamente():
     df_proc = st.session_state[f"{_STATE_PREFIX}_df"]
     col_nome = st.session_state[f"{_STATE_PREFIX}_col_nome"]
     incluir_cfil = st.session_state[f"{_STATE_PREFIX}_incluir_cfil"]
     inicio = st.session_state[f"{_STATE_PREFIX}_idx"]
-    fim = min(inicio + tamanho_bloco, len(df_proc))
 
     status_box = st.empty()
     progress = st.progress(inicio / len(df_proc))
+    progresso_txt = st.empty()
+    tempo_txt = st.empty()
     monitor = MonitorService()
     tcu_service = TCUAPFService()
 
     try:
-        for idx in range(inicio, fim):
+        for idx in range(inicio, len(df_proc)):
             row = df_proc.iloc[idx]
             razao = _empresa_nome(row, col_nome)
             status_box.info(f"Processando {idx + 1}/{len(df_proc)}: {razao}")
@@ -145,14 +121,23 @@ def _processar_bloco(tamanho_bloco: int):
             st.session_state[f"{_STATE_PREFIX}_pdfs_cadin"].append(pdf_cadin)
             st.session_state[f"{_STATE_PREFIX}_tempos"].append(time.time() - t0)
             st.session_state[f"{_STATE_PREFIX}_idx"] = idx + 1
+
+            media = sum(st.session_state[f"{_STATE_PREFIX}_tempos"]) / len(st.session_state[f"{_STATE_PREFIX}_tempos"])
+            restante = media * (len(df_proc) - (idx + 1))
             progress.progress((idx + 1) / len(df_proc))
+            progresso_txt.markdown(f"**{idx + 1} / {len(df_proc)}** empresas processadas")
+            tempo_txt.markdown(
+                f"Empresa atual: **{time.time() - t0:.1f}s** | "
+                f"Média: **{media:.1f}s/empresa** | "
+                f"Restante: **{str(timedelta(seconds=int(restante)))}**"
+            )
     finally:
         try:
             monitor.cadin.fechar()
         except Exception:
             pass
 
-    status_box.success(f"Bloco concluído: {fim}/{len(df_proc)} empresas processadas.")
+    status_box.success(f"Processamento concluído: {st.session_state[f'{_STATE_PREFIX}_idx']}/{len(df_proc)} empresas.")
 
 
 def _coletar_resumo():
@@ -191,7 +176,7 @@ def _coletar_resumo():
     return irregulares, erros, regulares
 
 
-def _render_status(tamanho_bloco: int):
+def _render_status():
     df_proc = st.session_state[f"{_STATE_PREFIX}_df"]
     idx = st.session_state[f"{_STATE_PREFIX}_idx"]
     tempos = st.session_state[f"{_STATE_PREFIX}_tempos"]
@@ -209,8 +194,8 @@ def _render_status(tamanho_bloco: int):
 
     col1, col2 = st.columns([1, 1])
     with col1:
-        if idx < total and st.button("Processar próximo bloco", type="primary"):
-            _processar_bloco(tamanho_bloco)
+        if idx < total and st.button("Iniciar/continuar processamento", type="primary"):
+            _processar_automaticamente()
             st.rerun()
     with col2:
         if st.button("Reiniciar este lote"):
@@ -367,14 +352,6 @@ def render():
         help="CFIL usa o relatório Power BI e deixa o lote muito mais lento. CADIN/RS será sempre consultado.",
         disabled=_state_ready(),
     )
-    tamanho_bloco = st.slider(
-        "Empresas por bloco",
-        min_value=1,
-        max_value=20,
-        value=5,
-        help="Blocos menores evitam perda de sessão no Streamlit Cloud.",
-    )
-
     if not _state_ready():
         df_proc = df.copy()
         df_proc["_cnpj_clean"] = df_proc[col_cnpj].apply(_limpar_cnpj)
@@ -397,5 +374,5 @@ def render():
             st.rerun()
         return
 
-    _render_status(tamanho_bloco)
+    _render_status()
     _render_resultados()
