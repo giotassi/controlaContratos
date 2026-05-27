@@ -19,7 +19,13 @@ class MonitorService:
         self.transparencia = TransparenciaService()
         logging.info("MonitorService inicializado")
         
-    def verificar_empresa(self, cnpj: str, razao_social: str = None, incluir_cadin: bool = True):
+    def verificar_empresa(
+        self,
+        cnpj: str,
+        razao_social: str = None,
+        incluir_cadin: bool = True,
+        incluir_cfil: bool = True,
+    ):
         """Verifica uma empresa em todos os serviços."""
         try:
             cnpj_formatado = format_cnpj(cnpj)
@@ -39,7 +45,7 @@ class MonitorService:
             # CADIN / CFIL (opcional)
             if incluir_cadin:
                 try:
-                    resultado_cadin = self.cadin.consultar(cnpj_formatado) or {}
+                    resultado_cadin = self.cadin.consultar(cnpj_formatado, incluir_cfil=incluir_cfil) or {}
                 except Exception as e:
                     logging.error(f"Erro CADIN {cnpj}: {e}")
                     resultado_cadin = {

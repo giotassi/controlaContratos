@@ -21,13 +21,16 @@ class CADINService:
     # API pública
     # ------------------------------------------------------------------
 
-    def consultar(self, cnpj: str) -> dict | None:
-        """Consulta CADIN e CFIL/RS para um CNPJ. Retorna dict ou None em erro."""
+    def consultar(self, cnpj: str, incluir_cfil: bool = True) -> dict | None:
+        """Consulta CADIN/RS e, opcionalmente, CFIL/RS para um CNPJ."""
         cnpj_digits = "".join(c for c in cnpj if c.isdigit())
         try:
             empresa_id = self._garantir_empresa(cnpj_digits)
-            cfil = self._consultar_cfil(cnpj_digits)
             cadin = self._consultar_cadin(cnpj_digits)
+            if incluir_cfil:
+                cfil = self._consultar_cfil(cnpj_digits)
+            else:
+                cfil = {"status": None, "observacoes": "Não consultado"}
             resultado = {"cadin": cadin, "cfil": cfil}
             self._salvar_monitoramentos(empresa_id, resultado)
             return resultado
