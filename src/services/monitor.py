@@ -220,6 +220,8 @@ class MonitorService:
 
     def _observacao_eh_erro(self, observacoes: str) -> bool:
         texto = (observacoes or "").lower()
+        if "irregular" in texto:
+            return False
         indicadores = [
             "erro na consulta",
             "erro http",
@@ -243,6 +245,7 @@ class MonitorService:
                 self.db.supabase.table("monitoramentos")\
                     .delete()\
                     .eq("status", False)\
+                    .neq("tipo_verificacao", "CONSOLIDADO")\
                     .ilike("observacoes", filtro)\
                     .execute()
             except Exception as e:

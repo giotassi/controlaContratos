@@ -48,7 +48,7 @@ class TransparenciaService:
             }
 
         logging.info("Iniciando consulta Portal da Transparência para CNPJ %s", cnpj)
-        empresa_id = self._garantir_empresa(cnpj, razao_social)
+        empresa_id = self._garantir_empresa(cnpj, razao_social) if salvar else None
         resultados = {}
         sistemas = ("ceis", "cnep")
 

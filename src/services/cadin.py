@@ -25,14 +25,14 @@ class CADINService:
         """Consulta CADIN/RS e, opcionalmente, CFIL/RS para um CNPJ."""
         cnpj_digits = "".join(c for c in cnpj if c.isdigit())
         try:
-            empresa_id = self._garantir_empresa(cnpj_digits)
+            empresa_id = self._garantir_empresa(cnpj_digits) if salvar else None
             cadin = self._consultar_cadin(cnpj_digits)
             if incluir_cfil:
                 cfil = self._consultar_cfil(cnpj_digits)
             else:
                 cfil = {"status": None, "observacoes": "Não consultado"}
             resultado = {"cadin": cadin, "cfil": cfil}
-            if salvar:
+            if salvar and empresa_id is not None:
                 self._salvar_monitoramentos(empresa_id, resultado)
             return resultado
         except Exception as e:

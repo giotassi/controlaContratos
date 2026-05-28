@@ -32,8 +32,11 @@ def _limpar_cnpj(valor) -> str:
 
 
 def _file_key(uploaded_file) -> str:
-    data = uploaded_file.getvalue()
-    return hashlib.sha256(data).hexdigest()
+    return hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+
+
+def _state_key(name: str) -> str:
+    return f"{_STATE_PREFIX}_{name}"
 
 
 def _reset_state():
@@ -42,39 +45,44 @@ def _reset_state():
             del st.session_state[key]
 
 
-def _init_state(df_proc: pd.DataFrame, col_nome: str, incluir_cfil: bool):
-    st.session_state[f"{_STATE_PREFIX}_df"] = df_proc
-    st.session_state[f"{_STATE_PREFIX}_col_nome"] = col_nome
-    st.session_state[f"{_STATE_PREFIX}_incluir_cfil"] = incluir_cfil
-    st.session_state[f"{_STATE_PREFIX}_idx"] = 0
-    st.session_state[f"{_STATE_PREFIX}_resultados"] = []
-    st.session_state[f"{_STATE_PREFIX}_pdfs_tcu"] = []
-    st.session_state[f"{_STATE_PREFIX}_pdfs_cadin"] = []
-    st.session_state[f"{_STATE_PREFIX}_tempos"] = []
-    st.session_state[f"{_STATE_PREFIX}_started_at"] = time.time()
-
-
 def _state_ready() -> bool:
-    return f"{_STATE_PREFIX}_df" in st.session_state
+    return _state_key("df") in st.session_state
 
 
 def _empresa_nome(row, col_nome: str):
     return str(row[col_nome]).strip() if col_nome else row["_cnpj_clean"]
 
 
-def _consultar_empresa(row, col_nome: str, incluir_cfil: bool, monitor: MonitorService, tcu_service: TCUAPFService):
+def _init_state(df_proc: pd.DataFrame, col_nome: str, incluir_cfil: bool):
+    st.session_state[_state_key("df")] = df_proc
+    st.session_state[_state_key("col_nome")] = col_nome
+    st.session_state[_state_key("incluir_cfil")] = incluir_cfil
+    st.session_state[_state_key("idx")] = 0
+    st.session_state[_state_key("running")] = True
+    st.session_state[_state_key("resultados")] = []
+    st.session_state[_state_key("pdfs_tcu")] = []
+    st.session_state[_state_key("pdfs_cadin")] = []
+    st.session_state[_state_key("tempos")] = []
+    st.session_state[_state_key("started_at")] = time.time()
+    st.session_state[_state_key("last_status")] = ""
+
+
+def _consultar_empresa(row, col_nome: str, incluir_cfil: bool):
+    monitor = MonitorService()
+    tcu_service = TCUAPFService()
     cnpj = row["_cnpj_clean"]
     razao = _empresa_nome(row, col_nome)
+
     resultado = monitor.verificar_empresa(
         cnpj,
         razao,
         incluir_cadin=True,
         incluir_cfil=incluir_cfil,
+        salvar=True,
     )
 
     pdf_tcu = None
     pdf_cadin = None
-
     if isinstance(resultado, dict) and (resultado.get("tcu") or {}).get("status") is False:
         certidao_tcu = tcu_service.consultar(cnpj, emitir_pdf=True)
         pdf_tcu = certidao_tcu.get("pdf_bytes") or {"error": certidao_tcu.get("error", "sem retorno")}
@@ -83,67 +91,50 @@ def _consultar_empresa(row, col_nome: str, incluir_cfil: bool, monitor: MonitorS
         certidao_cadin = monitor.cadin.emitir_certidao_cadin(cnpj)
         pdf_cadin = certidao_cadin.get("pdf_bytes") or {"error": certidao_cadin.get("error", "sem retorno")}
 
+    try:
+        monitor.cadin.fechar()
+    except Exception:
+        pass
+
     return resultado, pdf_tcu, pdf_cadin
 
 
-def _processar_automaticamente():
-    df_proc = st.session_state[f"{_STATE_PREFIX}_df"]
-    col_nome = st.session_state[f"{_STATE_PREFIX}_col_nome"]
-    incluir_cfil = st.session_state[f"{_STATE_PREFIX}_incluir_cfil"]
-    inicio = st.session_state[f"{_STATE_PREFIX}_idx"]
+def _processar_uma_empresa():
+    df_proc = st.session_state[_state_key("df")]
+    idx = st.session_state[_state_key("idx")]
+    if idx >= len(df_proc):
+        st.session_state[_state_key("running")] = False
+        return
 
-    status_box = st.empty()
-    progress = st.progress(inicio / len(df_proc))
-    progresso_txt = st.empty()
-    tempo_txt = st.empty()
-    monitor = MonitorService()
-    tcu_service = TCUAPFService()
+    col_nome = st.session_state[_state_key("col_nome")]
+    incluir_cfil = st.session_state[_state_key("incluir_cfil")]
+    row = df_proc.iloc[idx]
+    razao = _empresa_nome(row, col_nome)
+    cnpj = row["_cnpj_clean"]
 
+    st.session_state[_state_key("last_status")] = f"Processando {idx + 1}/{len(df_proc)}: {razao}"
+    t0 = time.time()
     try:
-        for idx in range(inicio, len(df_proc)):
-            row = df_proc.iloc[idx]
-            razao = _empresa_nome(row, col_nome)
-            status_box.info(f"Processando {idx + 1}/{len(df_proc)}: {razao}")
-            t0 = time.time()
-            try:
-                resultado, pdf_tcu, pdf_cadin = _consultar_empresa(
-                    row,
-                    col_nome,
-                    incluir_cfil,
-                    monitor,
-                    tcu_service,
-                )
-            except Exception as e:
-                resultado, pdf_tcu, pdf_cadin = {"error": str(e)}, None, None
+        resultado, pdf_tcu, pdf_cadin = _consultar_empresa(row, col_nome, incluir_cfil)
+    except Exception as e:
+        resultado, pdf_tcu, pdf_cadin = {"error": str(e)}, None, None
 
-            st.session_state[f"{_STATE_PREFIX}_resultados"].append(resultado)
-            st.session_state[f"{_STATE_PREFIX}_pdfs_tcu"].append(pdf_tcu)
-            st.session_state[f"{_STATE_PREFIX}_pdfs_cadin"].append(pdf_cadin)
-            st.session_state[f"{_STATE_PREFIX}_tempos"].append(time.time() - t0)
-            st.session_state[f"{_STATE_PREFIX}_idx"] = idx + 1
+    tempo = time.time() - t0
+    st.session_state[_state_key("resultados")].append(resultado)
+    st.session_state[_state_key("pdfs_tcu")].append(pdf_tcu)
+    st.session_state[_state_key("pdfs_cadin")].append(pdf_cadin)
+    st.session_state[_state_key("tempos")].append(tempo)
+    st.session_state[_state_key("idx")] = idx + 1
+    st.session_state[_state_key("last_status")] = f"Última: {razao} ({cnpj}) em {tempo:.1f}s"
 
-            media = sum(st.session_state[f"{_STATE_PREFIX}_tempos"]) / len(st.session_state[f"{_STATE_PREFIX}_tempos"])
-            restante = media * (len(df_proc) - (idx + 1))
-            progress.progress((idx + 1) / len(df_proc))
-            progresso_txt.markdown(f"**{idx + 1} / {len(df_proc)}** empresas processadas")
-            tempo_txt.markdown(
-                f"Empresa atual: **{time.time() - t0:.1f}s** | "
-                f"Média: **{media:.1f}s/empresa** | "
-                f"Restante: **{str(timedelta(seconds=int(restante)))}**"
-            )
-    finally:
-        try:
-            monitor.cadin.fechar()
-        except Exception:
-            pass
-
-    status_box.success(f"Processamento concluído: {st.session_state[f'{_STATE_PREFIX}_idx']}/{len(df_proc)} empresas.")
+    if st.session_state[_state_key("idx")] >= len(df_proc):
+        st.session_state[_state_key("running")] = False
 
 
 def _coletar_resumo():
-    df_proc = st.session_state[f"{_STATE_PREFIX}_df"]
-    col_nome = st.session_state[f"{_STATE_PREFIX}_col_nome"]
-    resultados = st.session_state[f"{_STATE_PREFIX}_resultados"]
+    df_proc = st.session_state[_state_key("df")]
+    col_nome = st.session_state[_state_key("col_nome")]
+    resultados = st.session_state[_state_key("resultados")]
     irregulares, erros, regulares = [], [], 0
 
     for idx, res in enumerate(resultados):
@@ -176,10 +167,10 @@ def _coletar_resumo():
     return irregulares, erros, regulares
 
 
-def _render_status():
-    df_proc = st.session_state[f"{_STATE_PREFIX}_df"]
-    idx = st.session_state[f"{_STATE_PREFIX}_idx"]
-    tempos = st.session_state[f"{_STATE_PREFIX}_tempos"]
+def _render_progresso():
+    df_proc = st.session_state[_state_key("df")]
+    idx = st.session_state[_state_key("idx")]
+    tempos = st.session_state[_state_key("tempos")]
     total = len(df_proc)
     media = sum(tempos) / len(tempos) if tempos else 0
     restante = media * (total - idx)
@@ -187,28 +178,34 @@ def _render_status():
     st.subheader("Progresso")
     st.progress(idx / total if total else 0)
     st.markdown(f"**{idx} / {total}** empresas processadas")
+    if st.session_state.get(_state_key("last_status")):
+        st.info(st.session_state[_state_key("last_status")])
     if tempos:
         st.caption(
-            f"Média: {media:.1f}s/empresa | Restante estimado: {str(timedelta(seconds=int(restante)))}"
+            f"Última consulta: {tempos[-1]:.1f}s | Média: {media:.1f}s/empresa | "
+            f"Restante estimado: {str(timedelta(seconds=int(restante)))}"
         )
 
-    col1, col2 = st.columns([1, 1])
+    col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
-        if idx < total and st.button("Iniciar/continuar processamento", type="primary"):
-            _processar_automaticamente()
-            st.rerun()
+        if idx < total and not st.session_state[_state_key("running")]:
+            if st.button("Continuar processamento", type="primary"):
+                st.session_state[_state_key("running")] = True
+                st.rerun()
     with col2:
-        if st.button("Reiniciar este lote"):
+        if idx < total and st.session_state[_state_key("running")]:
+            if st.button("Pausar"):
+                st.session_state[_state_key("running")] = False
+                st.rerun()
+    with col3:
+        if st.button("Reiniciar"):
             _reset_state()
             st.rerun()
 
 
 def _render_resultados():
-    if not _state_ready():
-        return
-
-    df_proc = st.session_state[f"{_STATE_PREFIX}_df"]
-    idx = st.session_state[f"{_STATE_PREFIX}_idx"]
+    df_proc = st.session_state[_state_key("df")]
+    idx = st.session_state[_state_key("idx")]
     irregulares, erros, regulares = _coletar_resumo()
 
     st.subheader("Resumo parcial" if idx < len(df_proc) else "Resumo final")
@@ -219,7 +216,7 @@ def _render_resultados():
     m4.metric("Regulares", regulares)
 
     if erros:
-        st.warning(f"{len(erros)} empresa(s) com erro de consulta:")
+        st.warning(f"{len(erros)} empresa(s) com erro técnico:")
         st.dataframe(pd.DataFrame(erros), use_container_width=True)
 
     _render_certidoes()
@@ -236,10 +233,10 @@ def _render_resultados():
 
 
 def _render_certidoes():
-    df_proc = st.session_state[f"{_STATE_PREFIX}_df"]
-    col_nome = st.session_state[f"{_STATE_PREFIX}_col_nome"]
-    pdfs_tcu = st.session_state[f"{_STATE_PREFIX}_pdfs_tcu"]
-    pdfs_cadin = st.session_state[f"{_STATE_PREFIX}_pdfs_cadin"]
+    df_proc = st.session_state[_state_key("df")]
+    col_nome = st.session_state[_state_key("col_nome")]
+    pdfs_tcu = st.session_state[_state_key("pdfs_tcu")]
+    pdfs_cadin = st.session_state[_state_key("pdfs_cadin")]
 
     certidoes_emitidas = 0
     for idx, (pdf_tcu, pdf_cadin) in enumerate(zip(pdfs_tcu, pdfs_cadin)):
@@ -270,9 +267,9 @@ def _render_certidoes():
 
 
 def _render_relatorio():
-    df_proc = st.session_state[f"{_STATE_PREFIX}_df"]
-    col_nome = st.session_state[f"{_STATE_PREFIX}_col_nome"]
-    resultados = st.session_state[f"{_STATE_PREFIX}_resultados"]
+    df_proc = st.session_state[_state_key("df")]
+    col_nome = st.session_state[_state_key("col_nome")]
+    resultados = st.session_state[_state_key("resultados")]
 
     relatorio = RelatorioService()
     dados_relatorio = []
@@ -300,6 +297,14 @@ def _render_relatorio():
         )
 
 
+def _preparar_planilha(df: pd.DataFrame, col_cnpj: str):
+    df_proc = df.copy()
+    df_proc["_cnpj_clean"] = df_proc[col_cnpj].apply(_limpar_cnpj)
+    linhas_originais = len(df_proc)
+    df_proc = df_proc[df_proc["_cnpj_clean"].str.len().isin([11, 14])].reset_index(drop=True)
+    return df_proc, linhas_originais - len(df_proc)
+
+
 def render():
     st.header("Consulta em Lote")
 
@@ -308,14 +313,13 @@ def render():
         type=["xlsx", "xls"],
         help="A planilha deve conter colunas de CNPJ e nome da empresa",
     )
-
     if not uploaded_file:
         return
 
     current_file_key = _file_key(uploaded_file)
-    if st.session_state.get(f"{_STATE_PREFIX}_file_key") != current_file_key:
+    if st.session_state.get(_state_key("file_key")) != current_file_key:
         _reset_state()
-        st.session_state[f"{_STATE_PREFIX}_file_key"] = current_file_key
+        st.session_state[_state_key("file_key")] = current_file_key
 
     try:
         df = pd.read_excel(uploaded_file, dtype=str)
@@ -347,32 +351,29 @@ def render():
         )
 
     incluir_cfil = st.checkbox(
-        "Incluir CFIL/RS no lote",
+        "Incluir CFIL/RS no processamento",
         value=False,
-        help="CFIL usa o relatório Power BI e deixa o lote muito mais lento. CADIN/RS será sempre consultado.",
+        help="CFIL usa Power BI/Selenium e pode deixar a consulta muito lenta. CADIN/RS será sempre consultado.",
         disabled=_state_ready(),
     )
-    if not _state_ready():
-        df_proc = df.copy()
-        df_proc["_cnpj_clean"] = df_proc[col_cnpj].apply(_limpar_cnpj)
-        linhas_originais = len(df_proc)
-        df_proc = df_proc[df_proc["_cnpj_clean"].str.len().isin([11, 14])].reset_index(drop=True)
 
+    if not _state_ready():
+        df_proc, ignoradas = _preparar_planilha(df, col_cnpj)
         if df_proc.empty:
             st.error(f"Nenhuma linha com CNPJ válido na coluna '{col_cnpj}'.")
             return
-        if len(df_proc) < linhas_originais:
-            st.warning(
-                f"{linhas_originais - len(df_proc)} linha(s) ignorada(s) por documento vazio ou com tamanho inválido."
-            )
-
-        st.info(
-            f"{len(df_proc)} empresa(s) serão processadas. CADIN/RS será consultado em todas."
-        )
+        if ignoradas:
+            st.warning(f"{ignoradas} linha(s) ignorada(s) por documento vazio ou com tamanho inválido.")
+        st.info(f"{len(df_proc)} empresa(s) serão processadas. CADIN/RS será consultado em todas.")
         if st.button("Iniciar processamento", type="primary"):
             _init_state(df_proc, col_nome, incluir_cfil)
             st.rerun()
         return
 
-    _render_status()
+    _render_progresso()
     _render_resultados()
+
+    if st.session_state.get(_state_key("running")):
+        _processar_uma_empresa()
+        time.sleep(0.2)
+        st.rerun()
